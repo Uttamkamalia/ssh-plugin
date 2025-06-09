@@ -1,0 +1,98 @@
+{
+    "discovery_profile_id": 1,
+    "metric_ids": [
+        "uname"
+    ],
+    "devices": [
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.234",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.235",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.236",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.237",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.238",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.239",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.240",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.241",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.242",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        },
+        {
+            "protocol": "SSH",
+            "ip": "127.10.1.243",
+            "port": 2222,
+            "credential": {
+                "username": "username",
+                "password": "password"
+            }
+        }
+    ]
+}

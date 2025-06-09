@@ -1,0 +1,84 @@
+{
+  "successful": [
+    {
+      "ip": "127.10.1.239",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.237",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.234",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.243",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.235",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.242",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.236",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.240",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.238",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    },
+    {
+      "ip": "127.10.1.241",
+      "port": 2222,
+      "protocol": "SSH",
+      "metrics": {
+        "uname": "Linux mock-host 5.15.0-virtual #1 SMP"
+      }
+    }
+  ]
+}
