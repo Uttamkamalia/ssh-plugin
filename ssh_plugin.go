@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"github.com/pebbe/zmq4"
 	"log"
 	"os"
 	"strings"
@@ -26,6 +26,9 @@ type GlobalConfig struct {
 	SSHRetries  int `json:"ssh_retries,omitempty"`
 
 	RetryBackoff time.Duration `json:"retry_backoff,omitempty"`
+
+	// New field for ZMQ endpoint
+	ZMQEndpoint string `json:"zmq_endpoint,omitempty"`
 }
 
 func DefaultConfig() GlobalConfig {
@@ -39,6 +42,7 @@ func DefaultConfig() GlobalConfig {
 		PortRetries:   2,
 		SSHRetries:    2,
 		RetryBackoff:  500 * time.Millisecond,
+		ZMQEndpoint:   "tcp://127.0.0.1:5555",
 	}
 }
 
@@ -117,7 +121,7 @@ func main() {
 }
 
 func runDiscovery(inputFile, outputFile string) {
-	raw, err := ioutil.ReadFile(inputFile)
+	raw, err := os.ReadFile(inputFile)
 	if err != nil {
 		log.Fatalf("Failed to read input file: %v", err)
 	}
@@ -151,7 +155,8 @@ func runPolling(rawJSON string) {
 	resultsChan := make(chan ResultOutput, 100)
 	doneChan := make(chan struct{})
 
-	go writeResultsToConsole(resultsChan, doneChan)
+	//go writeResultsToConsole(resultsChan, doneChan)
+	go writeResultsToZMQ(resultsChan, doneChan, config.ZMQEndpoint)
 
 	processDevicesConcurrently(input, "POLLING", resultsChan)
 
@@ -190,6 +195,9 @@ func applyOptionalConfig(custom *GlobalConfig) {
 	}
 	if custom.RetryBackoff > 0 {
 		config.RetryBackoff = custom.RetryBackoff * time.Millisecond
+	}
+	if custom.ZMQEndpoint != "" {
+		config.ZMQEndpoint = custom.ZMQEndpoint
 	}
 }
 
@@ -279,5 +287,57 @@ func writeResultsToConsole(resultsChan <-chan ResultOutput, doneChan chan<- stru
 		fmt.Println(string(data))
 	}
 
+	doneChan <- struct{}{}
+}
+
+func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string) {
+	// Create a publisher socket
+	publisher, err := zmq4.NewSocket(zmq4.PUB)
+	if err != nil {
+		log.Fatalf("Failed to create ZMQ socket: %v", err)
+	}
+	defer publisher.Close()
+
+	// Bind to the endpoint
+	if err := publisher.Bind(zmqEndpoint); err != nil {
+		log.Fatalf("Failed to bind ZMQ socket to %s: %v", zmqEndpoint, err)
+	}
+
+	// Process and send each result as it arrives
+	for result := range resultsChan {
+		// Send successful results
+		for _, success := range result.Successful {
+			// Marshal each successful result individually
+			data, err := json.Marshal(success)
+			if err != nil {
+				log.Printf("Failed to marshal successful result: %v", err)
+				continue
+			}
+
+			// Publish with "success" topic
+			if _, err := publisher.Send("success "+string(data), 0); err != nil {
+				log.Printf("Failed to publish successful result: %v", err)
+			}
+		}
+		log.Printf("sent data to publish successful result: %v", result)
+
+		// Send failed results
+		for _, failure := range result.Failed {
+			// Marshal each failed result individually
+			data, err := json.Marshal(failure)
+			if err != nil {
+				log.Printf("Failed to marshal failed result: %v", err)
+				continue
+			}
+
+			// Publish with "failure" topic
+			if _, err := publisher.Send("failure "+string(data), 0); err != nil {
+				log.Printf("Failed to publish failed result: %v", err)
+			}
+		}
+	}
+
+	// Give a small delay to ensure all messages are sent
+	time.Sleep(100 * time.Millisecond)
 	doneChan <- struct{}{}
 }
