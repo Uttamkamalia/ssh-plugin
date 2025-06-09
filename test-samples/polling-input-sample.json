@@ -11,8 +11,8 @@
         "port_timeout": 1,
         "ssh_timeout": 5,
 
-        "ping_retries": 0,
-        "port_retries": 0,
+        "ping_retries": 1,
+        "port_retries": 1,
         "ssh_retries": 1,
 
         "retry_backoff": 1
