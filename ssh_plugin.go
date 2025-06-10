@@ -49,11 +49,13 @@ func DefaultConfig() GlobalConfig {
 }
 
 type SSHInput struct {
-	DiscoveryProfileId  int           `json:"discovery_profile_id"`
-	DiscoveryBatchJobId string        `json:"discovery_batch_job_id"`
-	MetricIDs           []string      `json:"metric_ids"`
-	Devices             []Device      `json:"devices"`
-	Config              *GlobalConfig `json:"config,omitempty"`
+	DiscoveryProfileId int           `json:"discovery_profile_id"`
+	JobId              string        `json:"job_id"`
+	DeviceTypeId       int           `json:"device_type_id"`
+	MetricGroupId      int           `json:"metric_group_id"`
+	MetricIDs          []string      `json:"metric_ids"`
+	Devices            []Device      `json:"devices"`
+	Config             *GlobalConfig `json:"config,omitempty"`
 }
 
 type Device struct {
@@ -135,7 +137,7 @@ func runDiscovery(inputFile, outputFile string) {
 
 	applyOptionalConfig(input.Config)
 
-	resultsChan := make(chan ResultOutput, 100)
+	resultsChan := make(chan ResultOutput, config.Concurrency)
 	doneChan := make(chan struct{})
 
 	go writeResultsToFile(outputFile, resultsChan, doneChan)
@@ -154,7 +156,7 @@ func runPolling(rawJSON string) {
 
 	applyOptionalConfig(input.Config)
 
-	resultsChan := make(chan ResultOutput, 100)
+	resultsChan := make(chan ResultOutput, config.Concurrency)
 	doneChan := make(chan struct{})
 
 	//go writeResultsToConsole(resultsChan, doneChan)
@@ -241,6 +243,8 @@ func processDevicesConcurrently(input SSHInput, mode string, resultsChan chan<- 
 			if fres != nil {
 				resultsChan <- ResultOutput{Failed: []FailedResult{*fres}}
 			} else {
+				sres.DeviceTypeId = input.DeviceTypeId
+				sres.MetricGroupId = input.MetricGroupId
 				resultsChan <- ResultOutput{Successful: []SuccessfulResult{sres}}
 			}
 		}(device)
