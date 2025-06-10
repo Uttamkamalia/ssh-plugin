@@ -8,7 +8,7 @@ import (
 
 func main() {
 	// Create publisher socket
-	publisher, err := zmq4.NewSocket(zmq4.PUB)
+	publisher, err := zmq4.NewSocket(zmq4.PUSH)
 	if err != nil {
 		fmt.Printf("Error creating socket: %v\n", err)
 		return
@@ -16,7 +16,7 @@ func main() {
 	defer publisher.Close()
 
 	// Bind to endpoint
-	err = publisher.Bind("tcp://127.0.0.1:5555")
+	err = publisher.Connect("tcp://127.0.0.1:5555")
 	if err != nil {
 		fmt.Printf("Error binding: %v\n", err)
 		return

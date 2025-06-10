@@ -297,17 +297,17 @@ func writeResultsToConsole(resultsChan <-chan ResultOutput, doneChan chan<- stru
 
 func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string, publisherWaitTimeMs time.Duration) {
 	// Create a publisher socket
-	publisher, err := zmq4.NewSocket(zmq4.PUB)
+	publisher, err := zmq4.NewSocket(zmq4.PUSH)
 	if err != nil {
 		log.Fatalf("Failed to create ZMQ socket: %v", err)
 	}
 	defer publisher.Close()
 
 	// Bind to the endpoint
-	if err := publisher.Bind(zmqEndpoint); err != nil {
+	if err := publisher.Connect(zmqEndpoint); err != nil {
 		log.Fatalf("Failed to bind ZMQ socket to %s: %v", zmqEndpoint, err)
 	}
-	time.Sleep(10000 * time.Millisecond)
+	time.Sleep(publisherWaitTimeMs)
 
 	// Process and send each result as it arrives
 	for result := range resultsChan {
