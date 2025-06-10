@@ -27,22 +27,24 @@ type GlobalConfig struct {
 
 	RetryBackoff time.Duration `json:"retry_backoff,omitempty"`
 
-	// New field for ZMQ endpoint
-	ZMQEndpoint string `json:"zmq_endpoint,omitempty"`
+	// ZMQ configuration
+	ZMQEndpoint            string        `json:"zmq_endpoint,omitempty"`
+	ZMQPublisherWaitTimeMs time.Duration `json:"zmq_publisher_wait_time_ms,omitempty"`
 }
 
 func DefaultConfig() GlobalConfig {
 	return GlobalConfig{
-		Concurrency:   100,
-		DeviceTimeout: 30 * time.Second,
-		PingTimeout:   2 * time.Second,
-		PortTimeout:   2 * time.Second,
-		SSHTimeout:    5 * time.Second,
-		PingRetries:   2,
-		PortRetries:   2,
-		SSHRetries:    2,
-		RetryBackoff:  500 * time.Millisecond,
-		ZMQEndpoint:   "tcp://127.0.0.1:5555",
+		Concurrency:            100,
+		DeviceTimeout:          30 * time.Second,
+		PingTimeout:            2 * time.Second,
+		PortTimeout:            2 * time.Second,
+		SSHTimeout:             5 * time.Second,
+		PingRetries:            2,
+		PortRetries:            2,
+		SSHRetries:             2,
+		RetryBackoff:           500 * time.Millisecond,
+		ZMQEndpoint:            "tcp://127.0.0.1:5555",
+		ZMQPublisherWaitTimeMs: 5000 * time.Millisecond,
 	}
 }
 
@@ -156,7 +158,7 @@ func runPolling(rawJSON string) {
 	doneChan := make(chan struct{})
 
 	//go writeResultsToConsole(resultsChan, doneChan)
-	go writeResultsToZMQ(resultsChan, doneChan, config.ZMQEndpoint)
+	go writeResultsToZMQ(resultsChan, doneChan, config.ZMQEndpoint, config.ZMQPublisherWaitTimeMs)
 
 	processDevicesConcurrently(input, "POLLING", resultsChan)
 
@@ -198,6 +200,9 @@ func applyOptionalConfig(custom *GlobalConfig) {
 	}
 	if custom.ZMQEndpoint != "" {
 		config.ZMQEndpoint = custom.ZMQEndpoint
+	}
+	if custom.ZMQPublisherWaitTimeMs > 0 {
+		config.ZMQPublisherWaitTimeMs = custom.ZMQPublisherWaitTimeMs * time.Millisecond
 	}
 }
 
@@ -290,7 +295,7 @@ func writeResultsToConsole(resultsChan <-chan ResultOutput, doneChan chan<- stru
 	doneChan <- struct{}{}
 }
 
-func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string) {
+func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string, publisherWaitTimeMs time.Duration) {
 	// Create a publisher socket
 	publisher, err := zmq4.NewSocket(zmq4.PUB)
 	if err != nil {
@@ -302,6 +307,7 @@ func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}
 	if err := publisher.Bind(zmqEndpoint); err != nil {
 		log.Fatalf("Failed to bind ZMQ socket to %s: %v", zmqEndpoint, err)
 	}
+	time.Sleep(10000 * time.Millisecond)
 
 	// Process and send each result as it arrives
 	for result := range resultsChan {
@@ -319,7 +325,7 @@ func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}
 				log.Printf("Failed to publish successful result: %v", err)
 			}
 		}
-		log.Printf("sent data to publish successful result: %v", result)
+		log.Printf("sent data to publish successful result: %v to address %s", result, zmqEndpoint)
 
 		// Send failed results
 		for _, failure := range result.Failed {
@@ -334,10 +340,8 @@ func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}
 			if _, err := publisher.Send("failure "+string(data), 0); err != nil {
 				log.Printf("Failed to publish failed result: %v", err)
 			}
+			log.Printf("sent data to publish failed result: %v to address %s", result, zmqEndpoint)
 		}
 	}
-
-	// Give a small delay to ensure all messages are sent
-	time.Sleep(100 * time.Millisecond)
 	doneChan <- struct{}{}
 }
