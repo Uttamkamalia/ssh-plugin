@@ -30,6 +30,7 @@ type GlobalConfig struct {
 	// ZMQ configuration
 	ZMQEndpoint            string        `json:"zmq_endpoint,omitempty"`
 	ZMQPublisherWaitTimeMs time.Duration `json:"zmq_publisher_wait_time_ms,omitempty"`
+	ZMQHighWaterMark       int           `json:"zmqhighwatermark,omitempty"`
 }
 
 func DefaultConfig() GlobalConfig {
@@ -160,7 +161,7 @@ func runPolling(rawJSON string) {
 	doneChan := make(chan struct{})
 
 	//go writeResultsToConsole(resultsChan, doneChan)
-	go writeResultsToZMQ(resultsChan, doneChan, config.ZMQEndpoint, config.ZMQPublisherWaitTimeMs)
+	go writeResultsToZMQ(resultsChan, doneChan, config.ZMQEndpoint, config.ZMQPublisherWaitTimeMs, config.ZMQHighWaterMark)
 
 	processDevicesConcurrently(input, "POLLING", resultsChan)
 
@@ -299,7 +300,7 @@ func writeResultsToConsole(resultsChan <-chan ResultOutput, doneChan chan<- stru
 	doneChan <- struct{}{}
 }
 
-func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string, publisherWaitTimeMs time.Duration) {
+func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string, publisherWaitTimeMs time.Duration, hwm int) {
 	// Create a publisher socket
 	publisher, err := zmq4.NewSocket(zmq4.PUSH)
 	if err != nil {
@@ -307,9 +308,14 @@ func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}
 	}
 	defer publisher.Close()
 
-	// Bind to the endpoint
+	// Set high water mark (HWM) - maximum number of messages queued
+	if err := publisher.SetSndhwm(hwm); err != nil {
+		log.Printf("Warning: Failed to set send HWM: %v", err)
+	}
+	log.Printf("ZMQ send high water mark set to %d messages", hwm)
+
 	if err := publisher.Connect(zmqEndpoint); err != nil {
-		log.Fatalf("Failed to bind ZMQ socket to %s: %v", zmqEndpoint, err)
+		log.Fatalf("Failed to connect ZMQ socket to %s: %v", zmqEndpoint, err)
 	}
 	time.Sleep(publisherWaitTimeMs)
 

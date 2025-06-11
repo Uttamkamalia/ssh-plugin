@@ -25,12 +25,14 @@ func main() {
 	fmt.Println("Listening for messages...")
 
 	// Receive messages
+	var count = 0
 	for {
 		message, err := puller.Recv(0)
 		if err != nil {
 			fmt.Printf("Error receiving: %v\n", err)
 			continue
 		}
-		fmt.Printf("Received: %s\n", message)
+		fmt.Printf("Received: %s total-messages received: %d\n", message, count)
+		count = count + 1
 	}
 }
