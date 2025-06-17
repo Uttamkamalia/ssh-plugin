@@ -1,37 +1,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/pebbe/zmq4"
+	"golang.org/x/crypto/ssh"
 	"log"
 	"os"
 	"strings"
 	"time"
 )
 
-var config GlobalConfig = DefaultConfig()
-
-type GlobalConfig struct {
-	Concurrency   int           `json:"concurrency,omitempty"`
-	DeviceTimeout time.Duration `json:"device_timeout,omitempty"`
-
-	PingTimeout time.Duration `json:"ping_timeout,omitempty"`
-	PortTimeout time.Duration `json:"port_timeout,omitempty"`
-	SSHTimeout  time.Duration `json:"ssh_timeout,omitempty"`
-
-	PingRetries int `json:"ping_retries,omitempty"`
-	PortRetries int `json:"port_retries,omitempty"`
-	SSHRetries  int `json:"ssh_retries,omitempty"`
-
-	RetryBackoff time.Duration `json:"retry_backoff,omitempty"`
-
-	// ZMQ configuration
-	ZMQEndpoint            string        `json:"zmq_endpoint,omitempty"`
-	ZMQPublisherWaitTimeMs time.Duration `json:"zmq_publisher_wait_time_ms,omitempty"`
-	ZMQHighWaterMark       int           `json:"zmqhighwatermark,omitempty"`
-}
+const (
+	DISCOVERY = "DISCOVERY"
+	POLLING   = "POLLING"
+)
 
 func DefaultConfig() GlobalConfig {
 	return GlobalConfig{
@@ -45,57 +29,12 @@ func DefaultConfig() GlobalConfig {
 		SSHRetries:             2,
 		RetryBackoff:           500 * time.Millisecond,
 		ZMQEndpoint:            "tcp://127.0.0.1:5555",
-		ZMQPublisherWaitTimeMs: 5000 * time.Millisecond,
+		ZMQPublisherWaitTimeMs: 5 * time.Second, // Wait until the pull socket is connected before starting to push
+		ZMQHighWaterMark:       1000,
 	}
 }
 
-type SSHInput struct {
-	DiscoveryProfileId int           `json:"discovery_profile_id"`
-	JobId              string        `json:"job_id"`
-	DeviceTypeId       int           `json:"device_type_id"`
-	MetricGroupId      int           `json:"metric_group_id"`
-	MetricIDs          []string      `json:"metric_ids"`
-	Devices            []Device      `json:"devices"`
-	Config             *GlobalConfig `json:"config,omitempty"`
-}
-
-type Device struct {
-	DeviceTypeId  int `json:"device_type_id"`
-	DeviceId      int `json:"device_id"`
-	MetricGroupId int `json:"metric_group_id"`
-
-	IP         string            `json:"ip"`
-	Port       int               `json:"port"`
-	Protocol   string            `json:"protocol"`
-	Credential map[string]string `json:"credential"`
-}
-
-type SuccessfulResult struct {
-	DeviceTypeId  int `json:"device_type_id,omitempty"`
-	DeviceId      int `json:"device_id,omitempty"`
-	MetricGroupId int `json:"metric_group_id,omitempty"`
-
-	IP       string            `json:"ip"`
-	Port     int               `json:"port"`
-	Protocol string            `json:"protocol"`
-	Metrics  map[string]string `json:"metrics"`
-}
-
-type FailedResult struct {
-	DeviceTypeId  int `json:"device_type_id,omitempty"`
-	DeviceId      int `json:"device_id,omitempty"`
-	MetricGroupId int `json:"metric_group_id,omitempty"`
-
-	IP       string `json:"ip"`
-	Port     int    `json:"port"`
-	Protocol string `json:"protocol"`
-	Error    string `json:"error"`
-}
-
-type ResultOutput struct {
-	Successful []SuccessfulResult `json:"successful,omitempty"`
-	Failed     []FailedResult     `json:"failed,omitempty"`
-}
+var config GlobalConfig = DefaultConfig()
 
 func main() {
 	flag.Usage = func() {
@@ -113,20 +52,24 @@ func main() {
 	mode := strings.ToUpper(os.Args[1])
 
 	switch mode {
-	case "DISCOVERY":
+	// TODO define DISCOVERY, POLLING as enum if possible
+	case DISCOVERY:
 		if len(os.Args) < 4 {
 			log.Fatalf("DISCOVERY mode requires input and output file paths")
 		}
-		runDiscovery(os.Args[2], os.Args[3])
-	case "POLLING":
-		runPolling(os.Args[2])
+		inputFilePath := os.Args[2]
+		outputFilePath := os.Args[3]
+		runDiscovery(inputFilePath, outputFilePath)
+	case POLLING:
+		jsonInput := os.Args[2]
+		runPolling(jsonInput)
 	default:
 		log.Fatalf("Invalid MODE: %s (must be DISCOVERY or POLLING)", mode)
 	}
 }
 
-func runDiscovery(inputFile, outputFile string) {
-	raw, err := os.ReadFile(inputFile)
+func runDiscovery(inputFilePath, outputFilePath string) {
+	raw, err := os.ReadFile(inputFilePath)
 	if err != nil {
 		log.Fatalf("Failed to read input file: %v", err)
 	}
@@ -138,14 +81,16 @@ func runDiscovery(inputFile, outputFile string) {
 
 	applyOptionalConfig(input.Config)
 
-	resultsChan := make(chan ResultOutput, config.Concurrency)
+	successChan := make(chan SuccessfulResult, config.Concurrency)
+	failedChan := make(chan *FailedResult, config.Concurrency)
 	doneChan := make(chan struct{})
 
-	go writeResultsToFile(outputFile, resultsChan, doneChan)
+	go writeResultsToFile(outputFilePath, successChan, failedChan, doneChan)
 
-	processDevicesConcurrently(input, "DISCOVERY", resultsChan)
+	processDevicesConcurrently(input, DISCOVERY, successChan, failedChan)
 
-	close(resultsChan)
+	close(successChan)
+	close(failedChan)
 	<-doneChan
 }
 
@@ -157,89 +102,184 @@ func runPolling(rawJSON string) {
 
 	applyOptionalConfig(input.Config)
 
-	resultsChan := make(chan ResultOutput, config.Concurrency)
+	successChan := make(chan SuccessfulResult, config.Concurrency)
+	failedChan := make(chan *FailedResult, config.Concurrency)
 	doneChan := make(chan struct{})
 
-	//go writeResultsToConsole(resultsChan, doneChan)
-	go writeResultsToZMQ(resultsChan, doneChan, config.ZMQEndpoint, config.ZMQPublisherWaitTimeMs, config.ZMQHighWaterMark)
+	go writeResultsToZMQ(successChan, failedChan, doneChan, config.ZMQEndpoint, config.ZMQPublisherWaitTimeMs, config.ZMQHighWaterMark)
 
-	processDevicesConcurrently(input, "POLLING", resultsChan)
+	processDevicesConcurrently(input, POLLING, successChan, failedChan)
 
-	close(resultsChan)
+	close(successChan)
+	close(failedChan)
 	<-doneChan
 }
 
-func applyOptionalConfig(custom *GlobalConfig) {
-	if custom == nil {
-		return
+func processDevicesConcurrently(input SSHInput, mode string, successChan chan<- SuccessfulResult, failedChan chan<- *FailedResult) {
+	concurrentDevicesSemaphore := make(chan struct{}, config.Concurrency)
+
+	for _, device := range input.Devices {
+		concurrentDevicesSemaphore <- struct{}{}
+		go ProcessDeviceWithTimeout(device, input.MetricIDs, mode, config.DeviceTimeout, concurrentDevicesSemaphore, successChan, failedChan)
 	}
 
-	if custom.Concurrency > 0 {
-		config.Concurrency = custom.Concurrency
-	}
-	if custom.DeviceTimeout > 0 {
-		config.DeviceTimeout = custom.DeviceTimeout * time.Second
-	}
-	if custom.PingTimeout > 0 {
-		config.PingTimeout = custom.PingTimeout * time.Second
-	}
-	if custom.PortTimeout > 0 {
-		config.PortTimeout = custom.PortTimeout * time.Second
-	}
-	if custom.SSHTimeout > 0 {
-		config.SSHTimeout = custom.SSHTimeout * time.Second
-	}
-	if custom.PingRetries > 0 {
-		config.PingRetries = custom.PingRetries
-	}
-	if custom.PortRetries > 0 {
-		config.PortRetries = custom.PortRetries
-	}
-	if custom.SSHRetries > 0 {
-		config.SSHRetries = custom.SSHRetries
-	}
-	if custom.RetryBackoff > 0 {
-		config.RetryBackoff = custom.RetryBackoff * time.Millisecond
-	}
-	if custom.ZMQEndpoint != "" {
-		config.ZMQEndpoint = custom.ZMQEndpoint
-	}
-	if custom.ZMQPublisherWaitTimeMs > 0 {
-		config.ZMQPublisherWaitTimeMs = custom.ZMQPublisherWaitTimeMs * time.Millisecond
+	for i := 0; i < cap(concurrentDevicesSemaphore); i++ {
+		concurrentDevicesSemaphore <- struct{}{}
 	}
 }
 
-func processDevicesConcurrently(input SSHInput, mode string, resultsChan chan<- ResultOutput) {
-	sem := make(chan struct{}, config.Concurrency)
+func ProcessDeviceWithTimeout(device Device, metricIDs []string, mode string, timeout time.Duration, semaphoreChan chan struct{}, successChan chan<- SuccessfulResult, failedChan chan<- *FailedResult) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered from panic in device processing: %v", r)
+			failedChan <- &FailedResult{
+				DeviceTypeId:  device.DeviceTypeId,
+				DeviceId:      device.DeviceId,
+				MetricGroupId: device.MetricGroupId,
+				IP:            device.IP,
+				Port:          device.Port,
+				Protocol:      device.Protocol,
+				Error:         fmt.Sprintf("internal-error: panic recovered: %v", r),
+			}
+		}
+		<-semaphoreChan
+		cancel()
+	}()
+
+	successResult, failedResult := ProcessDevice(device, metricIDs, mode)
+
+	select {
+	case <-ctx.Done():
+		failedChan <- &FailedResult{
+			DeviceTypeId:  device.DeviceTypeId,
+			DeviceId:      device.DeviceId,
+			MetricGroupId: device.MetricGroupId,
+			IP:            device.IP,
+			Port:          device.Port,
+			Protocol:      device.Protocol,
+			Error:         "device-timeout",
+		}
+	default:
+		if failedResult != nil {
+			failedChan <- failedResult
+		} else {
+			successChan <- successResult
+		}
+	}
+
+}
+
+func ProcessDevice(device Device, metricIDs []string, mode string) (SuccessfulResult, *FailedResult) {
+	if mode == DISCOVERY {
+		if ok, err := Ping(device.IP); !ok {
+			return Failed(device, "ping-check-failed: "+err.Error())
+		}
+		if ok, err := PortOpen(device.IP, device.Port); !ok {
+			return Failed(device, "port-check-failed: "+err.Error())
+		}
+	}
+
+	username := device.Credential["username"]
+	password := device.Credential["password"]
+	metrics := make(map[string]string)
+
+	for _, metric := range metricIDs {
+		cmd, ok := MetricCommandMap[strings.ToLower(metric)]
+		if !ok {
+			metrics[metric] = "unsupported-metric"
+			continue
+		}
+		value, err := RunSSHCommand(device.IP, device.Port, username, password, cmd)
+		if err != nil {
+			metrics[metric] = "error: " + err.Error()
+		} else {
+			metrics[metric] = strings.TrimSpace(value)
+		}
+	}
+
+	return SuccessfulResult{
+		DeviceTypeId:  device.DeviceTypeId,
+		DeviceId:      device.DeviceId,
+		MetricGroupId: device.MetricGroupId,
+		IP:            device.IP,
+		Port:          device.Port,
+		Protocol:      device.Protocol,
+		Metrics:       metrics,
+	}, nil
+}
+
+func RunSSHCommand(ip string, port int, user, password, cmd string) (string, error) {
+	var lastErr error
+	for i := 0; i < config.SSHRetries; i++ {
+		configSSH := &ssh.ClientConfig{
+			User:            user,
+			Auth:            []ssh.AuthMethod{ssh.Password(password)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         config.SSHTimeout,
+		}
+
+		addr := fmt.Sprintf("%s:%d", ip, port)
+		client, err := ssh.Dial("tcp", addr, configSSH)
+		if err != nil {
+			lastErr = fmt.Errorf("ssh dial error: %w", err)
+			time.Sleep(config.RetryBackoff)
+			continue
+		}
+
+		session, err := client.NewSession()
+		if err != nil {
+			client.Close()
+			lastErr = fmt.Errorf("ssh new session error: %w", err)
+			time.Sleep(config.RetryBackoff)
+			continue
+		}
+
+		output, err := session.CombinedOutput(cmd)
+		session.Close()
+		client.Close()
+
+		if err != nil {
+			lastErr = fmt.Errorf("ssh command error: %w", err)
+			time.Sleep(config.RetryBackoff)
+			continue
+		}
+
+		return string(output), nil
+	}
+	return "", lastErr
+}
+
+// backup
+
+func processDevicesConcurrentlyBackup(input SSHInput, mode string, resultsChan chan<- ResultOutput) {
+	concurrentDevicesSemaphore := make(chan struct{}, config.Concurrency)
 
 	for _, device := range input.Devices {
-		sem <- struct{}{}
+		concurrentDevicesSemaphore <- struct{}{}
 
 		go func(d Device) {
-			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Recovered from panic in device processing: %v", r)
+					failedResult := FailedResult{
+						DeviceTypeId:  d.DeviceTypeId,
+						DeviceId:      d.DeviceId,
+						MetricGroupId: d.MetricGroupId,
+						IP:            d.IP,
+						Port:          d.Port,
+						Protocol:      d.Protocol,
+						Error:         fmt.Sprintf("internal-error: panic recovered: %v", r),
+					}
+					resultsChan <- ResultOutput{Failed: []FailedResult{failedResult}}
+				}
 
-			done := make(chan struct{})
-			var sres SuccessfulResult
-			var fres *FailedResult
-
-			go func() {
-				sres, fres = ProcessDeviceWithTimeout(d, input.MetricIDs, mode, config.DeviceTimeout)
-				close(done)
+				<-concurrentDevicesSemaphore
 			}()
 
-			select {
-			case <-done:
-			case <-time.After(config.DeviceTimeout):
-				fres = &FailedResult{
-					DeviceTypeId:  d.DeviceTypeId,
-					DeviceId:      d.DeviceId,
-					MetricGroupId: d.MetricGroupId,
-					IP:            d.IP,
-					Port:          d.Port,
-					Protocol:      d.Protocol,
-					Error:         "device-timeout",
-				}
-			}
+			var sres SuccessfulResult
+			var fres *FailedResult
+			sres, fres = ProcessDeviceWithTimeoutBackup(d, input.MetricIDs, mode, config.DeviceTimeout)
 
 			if fres != nil {
 				resultsChan <- ResultOutput{Failed: []FailedResult{*fres}}
@@ -251,107 +291,40 @@ func processDevicesConcurrently(input SSHInput, mode string, resultsChan chan<- 
 		}(device)
 	}
 
-	for i := 0; i < cap(sem); i++ {
-		sem <- struct{}{}
+	for i := 0; i < cap(concurrentDevicesSemaphore); i++ {
+		concurrentDevicesSemaphore <- struct{}{}
 	}
 }
 
-func writeResultsToFile(path string, resultsChan <-chan ResultOutput, doneChan chan<- struct{}) {
-	var finalResult ResultOutput
+func ProcessDeviceWithTimeoutBackup(device Device, metricIDs []string, mode string, timeout time.Duration) (SuccessfulResult, *FailedResult) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	for result := range resultsChan {
-		finalResult.Successful = append(finalResult.Successful, result.Successful...)
-		finalResult.Failed = append(finalResult.Failed, result.Failed...)
-	}
+	resChan := make(chan struct {
+		s SuccessfulResult
+		f *FailedResult
+	}, 1)
 
-	file, err := os.Create(path)
-	if err != nil {
-		log.Fatalf("Cannot create output file: %v", err)
-	}
-	defer func() {
-		file.Sync()
-		file.Close()
-		doneChan <- struct{}{}
+	go func() {
+		s, f := ProcessDevice(device, metricIDs, mode)
+		resChan <- struct {
+			s SuccessfulResult
+			f *FailedResult
+		}{s, f}
 	}()
 
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ") // Pretty-print output
-
-	if err := encoder.Encode(finalResult); err != nil {
-		log.Printf("Failed to write final result: %v", err)
-	}
-}
-
-func writeResultsToConsole(resultsChan <-chan ResultOutput, doneChan chan<- struct{}) {
-	var finalResult ResultOutput
-
-	for result := range resultsChan {
-		finalResult.Successful = append(finalResult.Successful, result.Successful...)
-		finalResult.Failed = append(finalResult.Failed, result.Failed...)
-	}
-
-	data, err := json.MarshalIndent(finalResult, "", "  ")
-	if err != nil {
-		log.Printf("Failed to marshal final result: %v", err)
-	} else {
-		fmt.Println(string(data))
-	}
-
-	doneChan <- struct{}{}
-}
-
-func writeResultsToZMQ(resultsChan <-chan ResultOutput, doneChan chan<- struct{}, zmqEndpoint string, publisherWaitTimeMs time.Duration, hwm int) {
-	// Create a publisher socket
-	publisher, err := zmq4.NewSocket(zmq4.PUSH)
-	if err != nil {
-		log.Fatalf("Failed to create ZMQ socket: %v", err)
-	}
-	defer publisher.Close()
-
-	// Set high water mark (HWM) - maximum number of messages queued
-	if err := publisher.SetSndhwm(hwm); err != nil {
-		log.Printf("Warning: Failed to set send HWM: %v", err)
-	}
-	log.Printf("ZMQ send high water mark set to %d messages", hwm)
-
-	if err := publisher.Connect(zmqEndpoint); err != nil {
-		log.Fatalf("Failed to connect ZMQ socket to %s: %v", zmqEndpoint, err)
-	}
-	time.Sleep(publisherWaitTimeMs)
-
-	// Process and send each result as it arrives
-	for result := range resultsChan {
-		// Send successful results
-		for _, success := range result.Successful {
-			// Marshal each successful result individually
-			data, err := json.Marshal(success)
-			if err != nil {
-				log.Printf("Failed to marshal successful result: %v", err)
-				continue
-			}
-
-			// Publish with "success" topic
-			if _, err := publisher.Send("success "+string(data), 0); err != nil {
-				log.Printf("Failed to publish successful result: %v", err)
-			}
+	select {
+	case <-ctx.Done():
+		return SuccessfulResult{}, &FailedResult{
+			DeviceTypeId:  device.DeviceTypeId,
+			DeviceId:      device.DeviceId,
+			MetricGroupId: device.MetricGroupId,
+			IP:            device.IP,
+			Port:          device.Port,
+			Protocol:      device.Protocol,
+			Error:         "device-timeout",
 		}
-		log.Printf("sent data to publish successful result: %v to address %s", result, zmqEndpoint)
-
-		// Send failed results
-		for _, failure := range result.Failed {
-			// Marshal each failed result individually
-			data, err := json.Marshal(failure)
-			if err != nil {
-				log.Printf("Failed to marshal failed result: %v", err)
-				continue
-			}
-
-			// Publish with "failure" topic
-			if _, err := publisher.Send("failure "+string(data), 0); err != nil {
-				log.Printf("Failed to publish failed result: %v", err)
-			}
-			log.Printf("sent data to publish failed result: %v to address %s", result, zmqEndpoint)
-		}
+	case result := <-resChan:
+		return result.s, result.f
 	}
-	doneChan <- struct{}{}
 }
