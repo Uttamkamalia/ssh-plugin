@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/pebbe/zmq4"
+	"time"
 )
 
 func main() {
@@ -26,13 +27,14 @@ func main() {
 
 	// Receive messages
 	var count = 0
+	var startTime = time.Now().Unix()
 	for {
 		message, err := puller.Recv(0)
 		if err != nil {
 			fmt.Printf("Error receiving: %v\n", err)
 			continue
 		}
-		fmt.Printf("Received: %s total-messages received: %d\n", message, count)
+		fmt.Printf("Received: %s total-messages received: %d at time:  %d secs\n", message, count, time.Now().Unix()-startTime)
 		count = count + 1
 	}
 }

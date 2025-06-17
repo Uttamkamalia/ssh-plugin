@@ -8,6 +8,9 @@ go run generate_input.go
 
 sudo bash ./add_ips_to_koopback.sh
 
+
+
+
 go run start_mockservers.go   --exclude 127.10.0.5,127.10.1.100
 
 
